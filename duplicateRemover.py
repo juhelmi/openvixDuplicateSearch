@@ -30,18 +30,21 @@ files_suggested_to_be_kept = []
 config_filename = "duplicate_config.json"
 json_data = '''
 { 
-"skipped_titles": [ 
-    "[Uu]utiset",
-    "Ylen aamu"
-],
-"files_searched": [
-    "[.]ts[.]meta$"
-],
-"file_size_factor": "0.95",
-"delete_duplicates": "False"
+    "skipped_titles": [ 
+        "[Uu]utiset",
+        "Ylen aamu"
+    ],
+    "files_searched": [
+        "[.]ts[.]meta$"
+    ],
+    "file_size_factor": "0.95",
+    "use_empty_epg_description": "0",
+    "delete_duplicates": "0"
 }
 '''
 # First check if config_duplicates.json is in default directory. Write default when none exists
+#if os.path.exists(config_filename):
+#    os.remove(config_filename)
 if not os.path.exists(config_filename):
     data1 = json.loads(json_data)
     out_file = open(config_filename, "w")
@@ -55,7 +58,8 @@ must_have_patterns = config['files_searched']
 skip_files_with_patterns = config['skipped_titles']
 # if factor value is 0.95 then last recording size must me at least 95 % of earlier maximum
 file_size_factor = float(config['file_size_factor'])
-delete_duplicates = bool(config['delete_duplicates'])
+delete_duplicates = bool(int(config['delete_duplicates']))
+use_empty_epg_description = bool(int(config['use_empty_epg_description']))
 
 # Filename processing first
 
@@ -112,6 +116,9 @@ for meta_index in range(len(meta_texts)):
     meta_data = meta_texts[meta_index]
     first_found = False
     for cmp_index in range(meta_index+1, len(meta_texts)):
+        if use_empty_epg_description == False and meta_data[3] == "":
+            # print(f"Empty description for {all_files[meta_index]} tile {meta_data[2]}")
+            continue
         if meta_data[2] == meta_texts[cmp_index][2] and meta_data[3] == meta_texts[cmp_index][3]:
             # print(f"Duplicate at {meta_index} cmp_inx: {cmp_index} {first_found} Title: {meta_data[2]} Content: {meta_data[3]}")
             # meta_texts[meta_index][4] = cmp_index
@@ -210,9 +217,9 @@ for f in files_suggested_to_be_kept:
 
 print(f"\nTo be removed records, count {len(files_suggested_to_be_removed)}")
 for rec in files_suggested_to_be_removed:
-    plain_name = string_without_extension(rec)
-    print(plain_name)
+    record_name = string_without_extension(rec)
+    print(record_name)
     if delete_duplicates:
-        for f in glob.glob(plain_name+".*"):
+        for f in glob.glob(record_name + ".*"):
             # print(f"Removes: {f}")
             os.remove(f)
