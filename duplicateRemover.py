@@ -6,6 +6,7 @@ import re
 import json
 # import io
 import glob
+import csv
 from copy import deepcopy
 
 def string_without_extension(s):
@@ -25,6 +26,20 @@ meta_texts = []
 
 files_suggested_to_be_removed = []
 files_suggested_to_be_kept = []
+files_skipped_by_pattern = []
+# Log contains list of record dates. Contains used index, result of duplicate test, filename, meta title and description, file size
+csv_log = []
+log_fieldnames = ['index', 'result', 'dupl_inx', 'filename', 'line2', 'line3', 'file_size']
+log_write_enabled = True
+
+def write_csv_log():
+    if log_write_enabled:
+        for name in files_skipped_by_pattern:
+            csv_log.append({'filename': name, 'index': -1, 'result': "-"})
+        with open('duplicate_search_log.csv', 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=log_fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_log)
 
 # Read configuration
 config_filename = "duplicate_config.json"
@@ -32,14 +47,16 @@ json_data = '''
 { 
     "skipped_titles": [ 
         "[Uu]utiset",
-        "Ylen aamu"
+        "Ylen aamu",
+        " Pilanp..?iten"
     ],
     "files_searched": [
         "[.]ts[.]meta$"
     ],
     "file_size_factor": "0.95",
-    "use_empty_epg_description": "0",
-    "delete_duplicates": "0"
+    "use_empty_epg_description": "1",
+    "delete_duplicates": "0",
+    "log_write_enabled": "1"
 }
 '''
 # First check if config_duplicates.json is in default directory. Write default when none exists
@@ -60,6 +77,7 @@ skip_files_with_patterns = config['skipped_titles']
 file_size_factor = float(config['file_size_factor'])
 delete_duplicates = bool(int(config['delete_duplicates']))
 use_empty_epg_description = bool(int(config['use_empty_epg_description']))
+log_write_enabled = bool(int(config['log_write_enabled']))
 
 # Filename processing first
 
@@ -86,10 +104,14 @@ for pattern_text in skip_files_with_patterns:
         if pattern.search(name):
             all_files.remove(name)
             # print(f"Skips {name}")
+            files_skipped_by_pattern.append(name)
 
-for f in all_files:
+# file count and positions are fixed. Start also log collection
+
+for inx, f in enumerate(all_files):
     pathname, extension = os.path.splitext(f)
     name = f.split('.')
+    rec_dict = {'filename': f, 'index': inx, 'result': False}
     if len(name) >= 3 and name[-2] == 'ts' and name[-1] == 'meta':
         meta_files.append(pathname)
         #print(f"{name[-3]} added and ext: {name[-2]+'.'+name[-1]}")
@@ -105,9 +127,12 @@ for f in all_files:
                 line2 = text_file.readline().strip()
                 line3 = text_file.readline().strip()
                 meta_texts.append((f, name_parts, line2, line3))
+                rec_dict['line2'] = line2
+                rec_dict['line3'] = line3
     else:
         # print(f"{f} skipped. Ext is {extension}")
         pass
+    csv_log.append(rec_dict)
 
 # Compare if same Title and contents is found from records
 # size of meta_texts will change
@@ -166,6 +191,7 @@ for dupl_inx, dupl_list in enumerate(cleaned_duplicates):
                 stat_of_file = os.stat(pathname)
                 size_of_file = stat_of_file.st_size
                 file_sizes[file_inx] = size_of_file
+                csv_log[file_inx]['file_size'] = size_of_file
             else:
                 # print(f"Size known {file_inx} {all_files[file_inx]}")
                 pass
@@ -182,6 +208,17 @@ for dupl_inx, dupl_list in enumerate(cleaned_duplicates):
             cleaned_duplicates[dupl_inx][max_inx] = cleaned_duplicates[dupl_inx][-1]
             cleaned_duplicates[dupl_inx][-1] = tmp
 
+# Set to log status for duplicate indexes
+for dupl_list in cleaned_duplicates:
+    for inx, value in enumerate(dupl_list):
+        # last index is kept on place
+        if 'dupl_inx' in csv_log[value]:
+            print(f"Internal error in cleaned_duplicates csv_log[value]['dupl_inx'] already has {csv_log[value]['dupl_inx']}, inx={value}")
+        if inx < len(dupl_list)-1:
+            csv_log[value]['dupl_inx'] = "- "+str(dupl_list)
+        else:
+            csv_log[value]['dupl_inx'] = "+ " + str(dupl_list)
+
 # Print all removals
 
 for meta_index in range(len(meta_texts)):
@@ -197,6 +234,7 @@ for meta_index in range(len(meta_texts)):
                 # print(f"{meta_index} Skips {meta_data[2]} {meta_data[3]}")
                 # print(f"{meta_index} {file_sizes[meta_index]} name:{all_files[meta_index]}")
                 files_suggested_to_be_removed.append(all_files[meta_index])
+                csv_log[meta_index]['result'] = True
                 # found_duplicates.remove(meta_index)
                 if len(cleaned_duplicates[i]) > 2:
                     del cleaned_duplicates[i][j]    # When more than two copies found skip files one by one until two left
@@ -223,3 +261,6 @@ for rec in files_suggested_to_be_removed:
         for f in glob.glob(record_name + ".*"):
             # print(f"Removes: {f}")
             os.remove(f)
+
+write_csv_log()
+
