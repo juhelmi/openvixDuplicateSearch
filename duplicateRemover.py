@@ -4,6 +4,7 @@ import os
 import sys
 import re
 import json
+import argparse
 # import io
 import glob
 import csv
@@ -12,15 +13,19 @@ from copy import deepcopy
 def string_without_extension(s):
     return re.sub(r"[.]ts[.]meta$", '', s)
 
+# Requires movie directory by default, mandatory argument
+parser = argparse.ArgumentParser()
+parser.add_argument("directory", help="Directory for recordings. The directory contains .ts and .ts.meta files. Default json configuration is stored to there also.", type=str, default="/mnt/hdd/movie/")
+parser.add_argument("-config_file", help="Full path and file name for configuration file.", default=".")
+args = parser.parse_args()
 
 # List of files to search duplicates
-path = "/mnt/win_share/movie"
 try:
-    all_files = os.listdir(path)
+    all_files = os.listdir(args.directory)
 except OSError as error:
     print(f"File list cannot be read, {error}")
     sys.exit("Digibox might be down, or atleast no connection")
-os.chdir(path)
+os.chdir(args.directory)
 meta_files = []
 meta_texts = []
 
@@ -42,7 +47,10 @@ def write_csv_log():
             writer.writerows(csv_log)
 
 # Read configuration
-config_filename = "duplicate_config.json"
+if args.config_file == ".":
+    config_filename = "duplicate_config.json"
+else:
+    config_filename = args.config_file
 json_data = '''
 { 
     "skipped_titles": [ 
@@ -54,7 +62,7 @@ json_data = '''
         "[.]ts[.]meta$"
     ],
     "file_size_factor": "0.95",
-    "use_empty_epg_description": "1",
+    "use_empty_epg_description": "0",
     "delete_duplicates": "0",
     "log_write_enabled": "1"
 }
