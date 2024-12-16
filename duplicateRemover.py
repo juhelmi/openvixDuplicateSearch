@@ -36,6 +36,7 @@ files_skipped_by_pattern = []
 csv_log = []
 log_fieldnames = ['index', 'result', 'dupl_inx', 'filename', 'line2', 'line3', 'file_size']
 log_write_enabled = True
+default_config_name = "duplicate_config.json"
 
 def write_csv_log():
     if log_write_enabled:
@@ -48,7 +49,7 @@ def write_csv_log():
 
 # Read configuration
 if args.config_file == ".":
-    config_filename = "duplicate_config.json"
+    config_filename = default_config_name
 else:
     config_filename = args.config_file
 json_data = '''
@@ -61,7 +62,7 @@ json_data = '''
     "files_searched": [
         "[.]ts[.]meta$"
     ],
-    "file_size_factor": "0.95",
+    "file_size_factor": "0.90",
     "use_empty_epg_description": "0",
     "delete_duplicates": "0",
     "log_write_enabled": "1"
@@ -210,7 +211,7 @@ for dupl_inx, dupl_list in enumerate(cleaned_duplicates):
             max_value = size_of_file
             max_inx = inx
     if max_inx != len(dupl_list)-1:
-        if max_value*1.0 > sizes[-1]*file_size_factor:
+        if max_value*file_size_factor > sizes[-1]*1.0:
             # swap last and value in max_inx
             tmp = cleaned_duplicates[dupl_inx][max_inx]
             cleaned_duplicates[dupl_inx][max_inx] = cleaned_duplicates[dupl_inx][-1]
