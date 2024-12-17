@@ -14,9 +14,14 @@ def string_without_extension(s):
     return re.sub(r"[.]ts[.]meta$", '', s)
 
 # Requires movie directory by default, mandatory argument
+# Target is that command line argument overrides config_file settings.
 parser = argparse.ArgumentParser()
 parser.add_argument("directory", help="Directory for recordings. The directory contains .ts and .ts.meta files. Default json configuration is stored to there also.", type=str, default="/mnt/hdd/movie/")
 parser.add_argument("-config_file", help="Full path and file name for configuration file.", default=".")
+parser.add_argument("-p", "--print_duplicates", help="Print only record names to be deleted. On error there could be other print outs.")
+parser.add_argument("-v", "--verbose", help="Give processing information, debugging mode. Adds extra prints for print_duplicates also",
+                    action='store_true')
+parser.add_argument("-d", "--delete_duplicates", help="Show only duplicates with 0. Delete with 1. Overrides config_file setting.")
 args = parser.parse_args()
 
 # Log contains list of record dates. Contains used index, result of duplicate test, filename, meta title and description, file size
@@ -47,35 +52,6 @@ def get_filelist_for_folder(folder, subfoldesrs_also=True):
                 result.extend(sub_list)
     return result
 
-# Read configuration
-if args.config_file == ".":
-    config_filename = default_config_name
-else:
-    config_filename = args.config_file
-json_data = '''
-{ 
-    "skipped_titles": [ 
-        "[Uu]utiset",
-        "Ylen aamu",
-        " Pilanp..?iten"
-    ],
-    "files_searched": [
-        "[.]ts[.]meta$"
-    ],
-    "file_size_factor": "0.90",
-    "use_empty_epg_description": "0",
-    "delete_duplicates": "0",
-    "log_write_enabled": "1"
-}
-'''
-# First check if config_duplicates.json is in default directory. Write default when none exists
-#if os.path.exists(config_filename):
-#    os.remove(config_filename)
-if not os.path.exists(config_filename):
-    data1 = json.loads(json_data)
-    out_file = open(config_filename, "w")
-    json.dump(data1, out_file, indent=2)
-    out_file.close()
 
 class DuplicateFinder:
     def __init__(self, movie_root, config_file):
@@ -102,6 +78,8 @@ class DuplicateFinder:
             "use_empty_epg_description": "0",
             "delete_duplicates": "0",
             "include_subfolders": "1",
+            "print_duplicates": "1",
+            "verbose": "0",
             "log_write_enabled": "1"
         }
         '''
@@ -125,6 +103,15 @@ class DuplicateFinder:
         self.use_empty_epg_description = bool(int(config['use_empty_epg_description']))
         self.log_write_enabled = bool(int(config['log_write_enabled']))
         self.include_subfolders = bool(int(config['include_subfolders']))  # includes also .Trash if not masked out
+        self.print_duplicates = bool(int(config['print_duplicates']))   # Supress other debug prints when true
+        self.verbose = bool(int(config['verbose']))
+
+        if args.verbose:
+            self.verbose = bool(int(args.verbose))
+        if args.print_duplicates:
+            self.print_duplicates = bool(int(args.print_duplicates))
+        if args.delete_duplicates:
+            self.delete_duplicates = bool(int(args.delete_duplicates))
 
         # List of files to search duplicates
         try:
@@ -239,7 +226,8 @@ class DuplicateFinder:
                         self.found_duplicates[-1] = last_list
                     # break
 
-        print(f"Found {len(self.found_duplicates)} duplicates\n{self.found_duplicates}")
+        if self.verbose:
+            print(f"Found {len(self.found_duplicates)} duplicates\n{self.found_duplicates}")
         # Nested list copied
         self.cleaned_duplicates = deepcopy( self.found_duplicates )
 
@@ -258,7 +246,8 @@ class DuplicateFinder:
                     dup_inx += 1
             inx += 1
 
-        print(f"Cleaned duplicates {len(self.cleaned_duplicates)} duplicates\n{self.cleaned_duplicates}\n")
+        if self.verbose:
+            print(f"Cleaned duplicates {len(self.cleaned_duplicates)} duplicates\n{self.cleaned_duplicates}\n")
         # Search biggest file and select it if bigger than last one. Marginal in comparison is 1%
         file_sizes=[-1 for i in range(len(self.all_files))]
         for dupl_inx, dupl_list in enumerate(self.cleaned_duplicates):
@@ -334,17 +323,22 @@ class DuplicateFinder:
 
     def _do_the_duplicate_removal(self):
         # Print "Good" records
-        print(f"Keep following records, count {len(self.files_suggested_to_be_kept)}")
-        for f in self.files_suggested_to_be_kept:
-            print(string_without_extension(f))
+        if not self.print_duplicates or self.verbose:
+            print(f"Keep following records, count {len(self.files_suggested_to_be_kept)}")
+            for f in self.files_suggested_to_be_kept:
+                print(string_without_extension(f))
 
-        print(f"\nTo be removed records, count {len(self.files_suggested_to_be_removed)}")
+        if not self.print_duplicates or self.verbose:
+            print(f"\nTo be removed records, count {len(self.files_suggested_to_be_removed)}")
         for rec in self.files_suggested_to_be_removed:
             record_name = string_without_extension(rec)
-            print(record_name)
-            if self.delete_duplicates:
+            if self.verbose or self.print_duplicates:
+                print(record_name)
+            # When printing is selected then no actual removal is not done
+            if self.delete_duplicates or not self.print_duplicates:
                 for f in glob.glob(record_name + ".*"):
-                    # print(f"Removes: {f}")
+                    if self.verbose:
+                        print(f"Removes: {f}")
                     os.remove(f)
         self._write_csv_log()
 
