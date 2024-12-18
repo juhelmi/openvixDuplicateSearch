@@ -9,6 +9,8 @@ import argparse
 import glob
 import csv
 from copy import deepcopy
+import subprocess
+import time
 
 def string_without_extension(s):
     return re.sub(r"[.]ts[.]meta$", '', s)
@@ -22,6 +24,9 @@ parser.add_argument("-p", "--print_duplicates", help="Print only record names to
 parser.add_argument("-v", "--verbose", help="Give processing information, debugging mode. Adds extra prints for print_duplicates also",
                     action='store_true')
 parser.add_argument("-d", "--delete_duplicates", help="Show only duplicates with 0. Delete with 1. Overrides config_file setting.")
+# External process could be find combined with grep
+# In practice this could be after json: -d 0 -v -s "find . -mmin +120 -maxdepth 2 -name '*.ts.meta'|grep -v .Trash"
+parser.add_argument("-s", "--stream", help="Get file list from other process stream")
 args = parser.parse_args()
 
 # Log contains list of record dates. Contains used index, result of duplicate test, filename, meta title and description, file size
@@ -112,22 +117,8 @@ class DuplicateFinder:
             self.print_duplicates = bool(int(args.print_duplicates))
         if args.delete_duplicates:
             self.delete_duplicates = bool(int(args.delete_duplicates))
+        self.process_string = args.stream
 
-        # List of files to search duplicates
-        try:
-            self.all_files = os.listdir(self.movie_path)
-            # Recursive search could be done but only first level is currently checked
-            found_sub_dirs = []
-            for dir_test in self.all_files:
-                sub_dir = self.movie_path+"/"+dir_test
-                # Search could be limited to one folder level if subfolders are not used when value is False
-                # if self.include_subfolders and os.path.isdir(sub_dir):
-                if os.path.isdir(sub_dir):
-                    self.all_files.extend(get_filelist_for_folder(sub_dir, self.include_subfolders))
-        except OSError as error:
-            print(f"File list cannot be read, {error}")
-            print(f"Given movie directory is {movie_root}")
-            sys.exit(1)
         os.chdir(self.movie_path)
         self.meta_files = []
         self.meta_texts = []
@@ -147,6 +138,22 @@ class DuplicateFinder:
 
     # Filename processing first
     def _get_files_for_checking(self):
+        # List of files to search duplicates
+        try:
+            self.all_files = os.listdir(self.movie_path)
+            # Recursive search could be done but only first level is currently checked
+            found_sub_dirs = []
+            for dir_test in self.all_files:
+                sub_dir = self.movie_path+"/"+dir_test
+                # Search could be limited to one folder level if subfolders are not used when value is False
+                # if self.include_subfolders and os.path.isdir(sub_dir):
+                if os.path.isdir(sub_dir):
+                    self.all_files.extend(get_filelist_for_folder(sub_dir, self.include_subfolders))
+        except OSError as error:
+            print(f"File list cannot be read, {error}")
+            print(f"Given movie directory is {movie_root}")
+            sys.exit(1)
+
         set_of_selections = set()
         if len(self.must_have_patterns) > 0:
             # Add all files to set
@@ -171,6 +178,27 @@ class DuplicateFinder:
                     self.all_files.remove(name)
                     # print(f"Skips {name}")
                     self.files_skipped_by_pattern.append(name)
+        if len(self.all_files) < 2:
+            print(f"Check path for directory as there are not enough files.")
+            return
+
+
+    def _get_files_via_process(self):
+        # Simple as all lines are filenames with full path
+
+        start = time.time()
+        process = subprocess.Popen(self.process_string, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True)
+        output, error = process.communicate()
+
+        t = time.time() - start
+        if self.verbose:
+            print(f"Elapsed time {t} for process {self.process_string}")
+        if error != "":
+            print(f"Errors found: {error}")
+            sys.exit(2)
+        self.all_files = output.split('\n')
+        if self.all_files[-1] == '':
+            del self.all_files[-1]
 
     def _collect_meta_data(self):
         # file count and positions are fixed. Start also log collection
@@ -343,10 +371,10 @@ class DuplicateFinder:
         self._write_csv_log()
 
     def process_the_data(self):
-        if len(self.all_files) < 2:
-            print(f"Check path for directory as there are not enough files.")
-            return
-        self._get_files_for_checking()
+        if not self.process_string:
+            self._get_files_for_checking()
+        else:
+            self._get_files_via_process()
         self._collect_meta_data()
         self._find_duplicates()
         self._collect_removal_status()
