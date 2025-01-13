@@ -33,7 +33,7 @@ args = parser.parse_args()
 
 # Log contains list of record dates. Contains used index, result of duplicate test, filename, meta title and description, file size
 csv_log = []
-log_fieldnames = ['index', 'result', 'dupl_inx', 'filename', 'line2', 'line3', 'file_size']
+log_fieldnames = ['index', 'result', 'restart', 'dupl_inx', 'filename', 'line2', 'line3', 'file_size']
 log_write_enabled = True
 default_config_name = "duplicate_config.json"
 meta_file_extension = r"[.]ts[.]meta$"     # Use regex format
@@ -254,6 +254,36 @@ class DuplicateFinder:
                 break;
             self.all_files.append(line.strip())
 
+    def _find_recording_restarts(self):
+        # input is all_files and it will be sorted
+        self.all_files.sort()
+        self.restarted_recording = [-1 for x in range(len(self.all_files)) ]
+        # Search pattern where basename has _001, _002 or _00n addition
+        p = re.compile(meta_file_extension)
+        str_p_same_start = r"_00[1-9]" + meta_file_extension
+        p_restart = re.compile(str_p_same_start)
+        for inx, value in enumerate(self.all_files):
+            if inx < len(self.all_files)-2:
+                m = p.search(value)
+                if m and m.start() > 0:
+                    pos = m.start()
+                    continued_recording = True
+                    continued_inx = 1
+                    while continued_recording and inx+continued_inx < len(self.all_files):
+                        if len(self.all_files[inx+continued_inx]) > pos + 4:
+                            continue_text = self.all_files[inx+continued_inx][pos:]
+                            if p_restart.match(continue_text):
+                                self.restarted_recording[inx] = inx         # first in chain marked
+                                self.restarted_recording[inx+continued_inx] = inx+continued_inx  # current in chain marked
+                                if self.verbose:
+                                    ref_basename = self.all_files[inx + continued_inx][0:pos]
+                                    print(f"Restarted recording found inx {inx+continued_inx-1} name {ref_basename} ending: {continue_text}")
+                            else:
+                                continued_recording = False
+                        else:
+                            continued_recording = False
+                        continued_inx += 1
+
     def _collect_meta_data(self):
         # file count and positions are fixed. Start also log collection
 
@@ -261,6 +291,18 @@ class DuplicateFinder:
             pathname, extension = os.path.splitext(f)
             name = f.split('.')
             rec_dict = {'filename': f, 'index': inx, 'result': False}
+            # Check first if record is restarted
+            if self.restarted_recording[inx] >= 0 or (
+                    inx + 1 < len(self.all_files) and self.restarted_recording[inx + 1] >= 0):
+                inx_cont = inx
+                restart_status = ""
+                while inx_cont < len(self.all_files) and self.restarted_recording[inx_cont] >= 0:
+                    if inx_cont == inx:
+                        restart_status = f"{inx}"
+                    else:
+                        restart_status += f", {inx_cont}"
+                    inx_cont += 1
+                rec_dict['restart'] = restart_status
             if len(name) >= 3 and name[-2] == 'ts' and name[-1] == 'meta':
                 self.meta_files.append(pathname)
                 #print(f"{name[-3]} added and ext: {name[-2]+'.'+name[-1]}")
@@ -290,9 +332,16 @@ class DuplicateFinder:
         # size of meta_texts will change
         self.found_duplicates = []
         for meta_index in range(len(self.meta_texts)):
+            # If index belongs to continued recording then skip here rest of recordings
+            if (meta_index > 0) and (self.restarted_recording[meta_index-1]+1 == meta_index):
+                continue
             meta_data = self.meta_texts[meta_index]
             first_found = False
             for cmp_index in range(meta_index+1, len(self.meta_texts)):
+                # if recording is continued part then continued records are skipped
+                if ((self.restarted_recording[cmp_index] >= 0) and
+                        ( (cmp_index == 0) or ((self.restarted_recording[cmp_index-1]+1) == cmp_index) )):
+                    continue
                 if self.use_empty_epg_description == False and meta_data[3] == "":
                     # print(f"Empty description for {all_files[meta_index]} tile {meta_data[2]}")
                     continue
@@ -375,53 +424,69 @@ class DuplicateFinder:
 
     def _collect_removal_status(self ):
         # Print all removals
+        # Remove continued recordings when first is removed
 
         for meta_index in range(len(self.meta_texts)):
             meta_data = self.meta_texts[meta_index]
             # Search current meta_index from rest of cleaned duplicates. Last index is to be kept.
-            skip_this_index = False
+            remove_this_record = False
             i = 0
-            while not skip_this_index and i < len(self.cleaned_duplicates):
+            while not remove_this_record and i < len(self.cleaned_duplicates):
                 j = 0
-                while not skip_this_index and j < len(self.cleaned_duplicates[i])-1:
+                while not remove_this_record and j < len(self.cleaned_duplicates[i])-1:
                     if self.cleaned_duplicates[i][j] == meta_index:
-                        skip_this_index = True
+                        remove_this_record = True
                         # print(f"{meta_index} Skips {meta_data[2]} {meta_data[3]}")
                         # print(f"{meta_index} {file_sizes[meta_index]} name:{all_files[meta_index]}")
-                        self.files_suggested_to_be_removed.append(self.all_files[meta_index])
+                        self.files_suggested_to_be_removed.append((meta_index, self.all_files[meta_index]))
                         csv_log[meta_index]['result'] = True
                         # found_duplicates.remove(meta_index)
                         if len(self.cleaned_duplicates[i]) > 2:
                             del self.cleaned_duplicates[i][j]    # When more than two copies found skip files one by one until two left
                         else:
                             del self.cleaned_duplicates[i]
+                        # Remove following records if restarted recording
+                        next_index = meta_index + 1
+                        while (next_index < len(self.all_files) and
+                               (self.restarted_recording[meta_index] >= 0) and
+                               (self.restarted_recording[meta_index]+1 == self.restarted_recording[next_index])):
+                            self.files_suggested_to_be_removed.append((next_index, self.all_files[next_index]))
+                            csv_log[next_index]['result'] = "delete"
+                            if self.verbose:
+                                print(f"Removes also restarted recording {next_index} {self.all_files[next_index]}")
+                            next_index += 1
                     else:
                         j += 1
                 i += 1
-            if not skip_this_index:
+            if not remove_this_record:
                 # print(f"{meta_index} Keeps {meta_data[2]} {meta_data[3]}")
                 # print(f"{meta_index} {file_sizes[meta_index]} name:{all_files[meta_index]}")
-                self.files_suggested_to_be_kept.append(self.all_files[meta_index])
+                self.files_suggested_to_be_kept.append((meta_index, self.all_files[meta_index]))
 
     def _do_the_duplicate_removal(self):
         # Print "Good" records
         if not self.print_duplicates or self.verbose:
             print(f"Keep following records, count {len(self.files_suggested_to_be_kept)}")
-            for f in self.files_suggested_to_be_kept:
-                print(string_without_extension(f))
+            for inx, f in self.files_suggested_to_be_kept:
+                print(f"{inx} {string_without_extension(f)}")
 
         if not self.print_duplicates or self.verbose:
             print(f"\nTo be removed records, count {len(self.files_suggested_to_be_removed)}")
-        for rec in self.files_suggested_to_be_removed:
+        for inx, rec in self.files_suggested_to_be_removed:
             record_name = string_without_extension(rec)
             if self.verbose or self.print_duplicates:
-                print(record_name)
+                print(f"{inx} {record_name}")
             # When printing is selected then no actual removal is not done
             if self.delete_duplicates or not self.print_duplicates:
                 for f in glob.glob(record_name + ".*"):
                     if self.verbose:
-                        print(f"Removes: {f}")
+                        print(f"Removes: {inx} {f}")
                     os.remove(f)
+                # Remove also continued recordings
+                #for f in glob.glob((record_name + "_0*")):
+                #    if self.verbose:
+                #        print(f"Removes: {inx} {f}")
+                #    os.remove(f)
         self._write_csv_log()
 
     def process_the_data(self):
@@ -431,6 +496,9 @@ class DuplicateFinder:
             self._get_files_via_process()
         else:
             self._get_files_for_checking()
+        # find duplicates for same timer recording
+        # self.all_files will be sorted
+        self._find_recording_restarts()
         self._collect_meta_data()
         self._find_duplicates()
         self._collect_removal_status()
